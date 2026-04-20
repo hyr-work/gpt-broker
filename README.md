@@ -1,4 +1,4 @@
-# GPT Broker
+# GPT Broker 
 
 Keep your OpenAI token out of the frontend and gate access behind Supabase-authenticated users. Exposes a `/metrics` endpoint for Prometheus.
 
