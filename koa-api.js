@@ -23,8 +23,33 @@ const app = new Koa();
 
 // app.context.redis = client;
 
-// Middleware
-app.use(cors());
+// CORS allowlist. Source from ALLOWED_ORIGINS env (comma-separated).
+// Defaults cover the Hyr production hostnames + local dev. NEVER call
+// `cors()` with no options — that reflects any Origin and, combined
+// with credentialed callers, exposes every authenticated route.
+const ALLOWED_ORIGINS = (
+	process.env.ALLOWED_ORIGINS ||
+	[
+		'https://candidate.hyr.works',
+		'https://hyr-api.hyr.works',
+		'https://interviewer.hyr.works',
+		'https://app.hyr.works',
+		'https://admin.hyr.works',
+		'http://localhost:3000',
+		'http://localhost:4000',
+		'http://localhost:8000',
+	].join(',')
+).split(',').map(s => s.trim()).filter(Boolean);
+
+app.use(cors({
+	origin: (ctx) => {
+		const requestOrigin = ctx.get('Origin');
+		return ALLOWED_ORIGINS.includes(requestOrigin) ? requestOrigin : '';
+	},
+	credentials: true,
+	allowHeaders: ['Authorization', 'Content-Type', 'X-Requested-With'],
+	allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+}));
 app.use(bodyParser());
 app.use(updateMetrics)
 
