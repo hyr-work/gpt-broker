@@ -1,3 +1,4 @@
+import crypto from "node:crypto"
 import Router from "koa-router"
 import { validateUser, checkRateLimit } from "./middleware.js"
 import { generateResponse, generateResponseStream } from "./openaiChatCompletions.js"
@@ -17,7 +18,27 @@ router.get('/health', async ctx => {
 })
 
 
+// Prometheus metrics. Locked behind a shared token so we don't leak
+// internal request volume / model usage / failure rates publicly.
+// If METRICS_TOKEN is unset, the endpoint 404s (don't reveal existence).
 router.get('/metrics', async ctx => {
+	const expected = process.env.METRICS_TOKEN;
+	if (!expected) {
+		ctx.status = 404;
+		ctx.body = { error: 'Endpoint not found' };
+		return;
+	}
+	const provided = ctx.get('X-Metrics-Token');
+	const expectedBuf = Buffer.from(expected, 'utf8');
+	const providedBuf = Buffer.from(provided || '', 'utf8');
+	if (
+		expectedBuf.length !== providedBuf.length ||
+		!crypto.timingSafeEqual(expectedBuf, providedBuf)
+	) {
+		ctx.status = 401;
+		ctx.body = { error: 'Unauthorized' };
+		return;
+	}
 	ctx.type = 'text/plain';
 	ctx.body = await register.metrics();
 })

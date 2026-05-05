@@ -39,36 +39,50 @@ async function validateUser(ctx, next) {
 	await next();
 };
 
+// In-memory sliding-window rate limit. Per-process — fine for a single
+// broker instance. Move to Redis if we ever scale this horizontally.
+const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_PER_HOUR || '100', 10);
+const rateLimitBuckets = new Map(); // userId -> [timestamps]
+
+function pruneBucket(timestamps, now) {
+	const cutoff = now - RATE_LIMIT_WINDOW_MS;
+	while (timestamps.length && timestamps[0] < cutoff) timestamps.shift();
+}
+
 async function checkRateLimit(ctx, next) {
-	
-	// const user = ctx.state.user;
+	const user = ctx.state.user;
+	if (!user) {
+		throw new Error('checkRateLimit requires validateUser to have populated ctx.state.user first');
+	}
 
-	// if (!user) { throw Error("checkRateLimit could not get the user object. Make sure previous middleware added it to ctx.state.user before calling checkRateLimit") }
+	const now = Date.now();
+	let timestamps = rateLimitBuckets.get(user.id);
+	if (!timestamps) {
+		timestamps = [];
+		rateLimitBuckets.set(user.id, timestamps);
+	}
+	pruneBucket(timestamps, now);
 
-	// const key = `rate_limit:${user.id}`;
-	// const windowSeconds = 60 * 60; // 1 hour
-	// const limit = 100;
-	// const replies = await ctx.redis.multi()
-	// 	.incr(key)
-	// 	.expire(key, windowSeconds)
-	// 	.get(key)
-	// 	.exec((err, replies) => {
-	// 		if (err) {
-	// 			console.error(' - ‼️ redis error: ' + err);
-	// 		} else {
-	// 			console.log(replies)
-	// 		}
-	// 	});
-	
-	// const currentRequests = parseInt(replies[2]);
+	if (timestamps.length >= RATE_LIMIT_MAX) {
+		const retryAfterSec = Math.max(1, Math.ceil((timestamps[0] + RATE_LIMIT_WINDOW_MS - now) / 1000));
+		ctx.set('Retry-After', String(retryAfterSec));
+		ctx.status = 429;
+		ctx.body = { error: 'Rate limit exceeded. Try again later.', message: null };
+		return;
+	}
 
-	// if (currentRequests > limit) {
-	// 	ctx.status = 429;
-	// 	ctx.body = { error: 'GPT Rate limit exceeded. Try again later.', message: null }
-	// 	return;
-	// }
-
+	timestamps.push(now);
 	await next();
 }
+
+// Periodically drop empty buckets so the Map doesn't grow unbounded.
+setInterval(() => {
+	const now = Date.now();
+	for (const [id, timestamps] of rateLimitBuckets) {
+		pruneBucket(timestamps, now);
+		if (timestamps.length === 0) rateLimitBuckets.delete(id);
+	}
+}, 10 * 60 * 1000).unref?.();
 
 export { validateUser, checkRateLimit, updateMetrics };
